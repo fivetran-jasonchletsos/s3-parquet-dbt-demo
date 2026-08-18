@@ -1,0 +1,74 @@
+version: 2
+
+# Honesty note on lineage:
+# These "tables" are parquet prefixes in S3, not objects registered in Unity
+# Catalog. The staging models read them in place with read_files(), which
+# cannot be expressed through {{ source() }} because source() must render to
+# a catalog.schema.table identifier. Registering true external tables (the
+# CREATE TABLE ... USING PARQUET LOCATION pattern in ../setup/databricks_setup.md)
+# would require the UC storage credential + external location to exist first.
+# Until then this sources.yml is documentation-only: it records the S3 origin
+# for dbt docs and reviewers, and it is intentionally not referenced by any
+# model. If the external tables are created, repoint the staging models at
+# {{ source('s3_raw', '<table>') }} and this block becomes live lineage.
+sources:
+  - name: s3_raw
+    description: >
+      Raw parquet files in s3://jason-chletsos-parquet-dbt-demo/raw/, read in
+      place by the staging models via read_files(). No copy into the
+      warehouse; DuckDB/Snowflake/Databricks all point at the same objects.
+    schema: jason_chletsos_parquet_demo
+    tables:
+      - name: customers
+        description: >
+          Raw customer parquet; 500 rows, one file, one row per customer.
+          Location: s3://jason-chletsos-parquet-dbt-demo/raw/customers/.
+        config:
+          meta:
+            external_location: "s3://jason-chletsos-parquet-dbt-demo/raw/customers/"
+        columns:
+          - name: customer_id
+            description: Primary key for the customer.
+          - name: customer_name
+            description: Customer display name.
+          - name: region
+            description: Geographic region the customer belongs to.
+          - name: signup_date
+            description: Date the customer signed up.
+      - name: products
+        description: >
+          Raw product parquet; 50 rows, one file, one row per product.
+          Location: s3://jason-chletsos-parquet-dbt-demo/raw/products/.
+        config:
+          meta:
+            external_location: "s3://jason-chletsos-parquet-dbt-demo/raw/products/"
+        columns:
+          - name: product_id
+            description: Primary key for the product.
+          - name: product_name
+            description: Product display name.
+          - name: category
+            description: Product category.
+          - name: unit_price
+            description: Price per unit.
+      - name: orders
+        description: >
+          Raw order parquet; 5,000 rows across three files, one row per order.
+          Location: s3://jason-chletsos-parquet-dbt-demo/raw/orders/.
+        config:
+          meta:
+            external_location: "s3://jason-chletsos-parquet-dbt-demo/raw/orders/"
+        columns:
+          - name: order_id
+            description: Primary key for the order.
+          - name: customer_id
+            description: References customers.customer_id.
+          - name: product_id
+            description: References products.product_id.
+          - name: quantity
+            description: Units ordered.
+          - name: order_ts
+            description: >
+              When the order was placed. The parquet stores the instant in UTC.
+          - name: status
+            description: Order status; one of placed, shipped, delivered, cancelled.

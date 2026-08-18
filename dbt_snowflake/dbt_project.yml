@@ -1,0 +1,18 @@
+name: parquet_snowflake_demo
+version: "1.0.0"
+profile: parquet_snowflake_demo
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+
+target-path: target
+clean-targets:
+  - target
+  - dbt_packages
+
+models:
+  parquet_snowflake_demo:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table

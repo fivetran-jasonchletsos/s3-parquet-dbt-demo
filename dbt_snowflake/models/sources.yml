@@ -1,0 +1,100 @@
+version: 2
+
+sources:
+  - name: raw_parquet
+    description: >
+      Parquet files in s3://jason-chletsos-parquet-dbt-demo/raw/, read in place
+      by Snowflake external tables. Nothing is copied into Snowflake; the
+      external tables are metadata over the stage created in
+      setup/snowflake_setup.sql. Materialize them with:
+      python3 -m dbt.cli.main run-operation stage_external_sources --profiles-dir .
+    database: "{{ env_var('SNOWFLAKE_DATABASE', 'JASON_CHLETSOS_PARQUET_DEMO') }}"
+    schema: RAW
+    loader: S3
+    tables:
+      # dbt_external_tables maps each declared column to value:<name>::<type>
+      # from the parquet VALUE variant. Alternatively Snowflake can derive the
+      # column list itself via INFER_SCHEMA on the stage; columns are declared
+      # explicitly here so the external tables match the data contract exactly.
+      - name: customers
+        description: >
+          Raw customer parquet; 500 rows, one file, one row per customer.
+        external:
+          location: "@{{ env_var('SNOWFLAKE_DATABASE', 'JASON_CHLETSOS_PARQUET_DEMO') }}.RAW.PARQUET_STAGE/customers"
+          file_format: "{{ env_var('SNOWFLAKE_DATABASE', 'JASON_CHLETSOS_PARQUET_DEMO') }}.RAW.PARQUET_FORMAT"
+          # This Snowflake account is not hosted on AWS; cross-cloud external
+          # tables over S3 require auto_refresh disabled (refresh via ALTER
+          # EXTERNAL TABLE ... REFRESH or re-running stage_external_sources).
+          auto_refresh: false
+        columns:
+          - name: customer_id
+            data_type: number
+            description: Primary key for the customer.
+          - name: customer_name
+            data_type: varchar
+            description: Customer display name.
+          - name: region
+            data_type: varchar
+            description: Geographic region the customer belongs to.
+          - name: signup_date
+            data_type: date
+            description: Date the customer signed up.
+
+      - name: products
+        description: >
+          Raw product parquet; 50 rows, one file, one row per product.
+        external:
+          location: "@{{ env_var('SNOWFLAKE_DATABASE', 'JASON_CHLETSOS_PARQUET_DEMO') }}.RAW.PARQUET_STAGE/products"
+          file_format: "{{ env_var('SNOWFLAKE_DATABASE', 'JASON_CHLETSOS_PARQUET_DEMO') }}.RAW.PARQUET_FORMAT"
+          # This Snowflake account is not hosted on AWS; cross-cloud external
+          # tables over S3 require auto_refresh disabled (refresh via ALTER
+          # EXTERNAL TABLE ... REFRESH or re-running stage_external_sources).
+          auto_refresh: false
+        columns:
+          - name: product_id
+            data_type: number
+            description: Primary key for the product.
+          - name: product_name
+            data_type: varchar
+            description: Product display name.
+          - name: category
+            data_type: varchar
+            description: Product category.
+          - name: unit_price
+            data_type: float
+            description: Price per unit.
+
+      - name: orders
+        description: >
+          Raw order parquet; 5,000 rows across three files, one row per order.
+        external:
+          location: "@{{ env_var('SNOWFLAKE_DATABASE', 'JASON_CHLETSOS_PARQUET_DEMO') }}.RAW.PARQUET_STAGE/orders"
+          file_format: "{{ env_var('SNOWFLAKE_DATABASE', 'JASON_CHLETSOS_PARQUET_DEMO') }}.RAW.PARQUET_FORMAT"
+          # This Snowflake account is not hosted on AWS; cross-cloud external
+          # tables over S3 require auto_refresh disabled (refresh via ALTER
+          # EXTERNAL TABLE ... REFRESH or re-running stage_external_sources).
+          auto_refresh: false
+        columns:
+          - name: order_id
+            data_type: number
+            description: Primary key for the order.
+          - name: customer_id
+            data_type: number
+            description: References customers.customer_id.
+          - name: product_id
+            data_type: number
+            description: References products.product_id.
+          - name: quantity
+            data_type: number
+            description: Units ordered.
+          - name: order_ts
+            # Parquet stores the instant as UTC; typing it TIMESTAMP_TZ would
+            # re-stamp the UTC wall-clock with the session timezone (wrong
+            # instant). TIMESTAMP_NTZ keeps it as naive UTC, matching the
+            # duckdb and databricks projects.
+            data_type: timestamp_ntz
+            description: >
+              When the order was placed. The parquet stores the instant in UTC.
+          - name: status
+            data_type: varchar
+            description: Order status; one of placed, shipped, delivered, cancelled.

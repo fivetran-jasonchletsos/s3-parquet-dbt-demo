@@ -1,0 +1,97 @@
+version: 2
+
+models:
+  - name: stg_customers
+    description: >
+      One row per customer. Typed view over the raw customers parquet,
+      read in place by the engine.
+    columns:
+      - name: customer_id
+        description: Primary key for the customer.
+        tests:
+          - unique
+          - not_null
+      - name: customer_name
+        description: Customer display name.
+      - name: region
+        description: Geographic region the customer belongs to.
+      - name: signup_date
+        description: Date the customer signed up.
+
+  - name: stg_products
+    description: >
+      One row per product. Typed view over the raw products parquet,
+      read in place by the engine.
+    columns:
+      - name: product_id
+        description: Primary key for the product.
+        tests:
+          - unique
+          - not_null
+      - name: product_name
+        description: Product display name.
+      - name: category
+        description: Product category.
+      - name: unit_price
+        description: Price per unit.
+
+  - name: stg_orders
+    description: >
+      One row per order. Typed view over the raw orders parquet, read in
+      place by the engine, with an is_cancelled flag derived from status.
+    columns:
+      - name: order_id
+        description: Primary key for the order.
+        tests:
+          - unique
+          - not_null
+      - name: customer_id
+        description: Foreign key to stg_customers.customer_id.
+        tests:
+          - relationships:
+              arguments:
+                to: ref('stg_customers')
+                field: customer_id
+      - name: product_id
+        description: Foreign key to stg_products.product_id.
+        tests:
+          - relationships:
+              arguments:
+                to: ref('stg_products')
+                field: product_id
+      - name: quantity
+        description: Units ordered.
+      - name: order_ts
+        description: >
+          When the order was placed. The parquet stores the instant in UTC.
+      - name: status
+        description: Order status; one of placed, shipped, delivered, cancelled.
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['placed', 'shipped', 'delivered', 'cancelled']
+      - name: is_cancelled
+        description: True when status is cancelled.
+
+  - name: fct_daily_revenue
+    description: >
+      Daily gross revenue. Grain: one row per UTC order date, product
+      category, and customer region. Includes only orders with status
+      shipped or delivered. gross_revenue = sum(quantity * unit_price).
+    columns:
+      - name: order_date
+        description: UTC calendar date the order was placed (part of the grain).
+        tests:
+          - not_null
+      - name: category
+        description: Product category (part of the grain).
+      - name: region
+        description: Customer region (part of the grain).
+      - name: order_count
+        description: Number of shipped or delivered orders in the group.
+      - name: total_quantity
+        description: Sum of units across those orders.
+      - name: gross_revenue
+        description: Sum of quantity * unit_price across those orders.
+        tests:
+          - not_null

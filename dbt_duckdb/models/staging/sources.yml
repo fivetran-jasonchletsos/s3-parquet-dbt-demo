@@ -1,0 +1,60 @@
+version: 2
+
+sources:
+  - name: raw_parquet
+    description: >
+      Raw parquet files read in place by DuckDB — from data/ on disk for the
+      local target, or from s3://jason-chletsos-parquet-dbt-demo/raw/ for the
+      s3 target. Nothing is copied or loaded first.
+    # dbt-duckdb: meta.external_location makes source() resolve to a
+    # read_parquet() call instead of a database relation, so the parquet
+    # files are queried in place — nothing is loaded first.
+    config:
+      meta:
+        # The default root is target-aware: the s3 target reads the bucket,
+        # every other target reads the local files. `--target s3` alone can
+        # therefore never fall back to local data (that would be a false S3
+        # proof). Override either root with --vars '{data_root: ...}'.
+        external_location: "read_parquet('{{ var('data_root', 's3://jason-chletsos-parquet-dbt-demo/raw' if target.name == 's3' else '../data') }}/{name}/*.parquet')"
+    tables:
+      - name: customers
+        description: >
+          Raw customer parquet; 500 rows, one file, one row per customer.
+        columns:
+          - name: customer_id
+            description: Primary key for the customer.
+          - name: customer_name
+            description: Customer display name.
+          - name: region
+            description: Geographic region the customer belongs to.
+          - name: signup_date
+            description: Date the customer signed up.
+      - name: products
+        description: >
+          Raw product parquet; 50 rows, one file, one row per product.
+        columns:
+          - name: product_id
+            description: Primary key for the product.
+          - name: product_name
+            description: Product display name.
+          - name: category
+            description: Product category.
+          - name: unit_price
+            description: Price per unit.
+      - name: orders
+        description: >
+          Raw order parquet; 5,000 rows across three files, one row per order.
+        columns:
+          - name: order_id
+            description: Primary key for the order.
+          - name: customer_id
+            description: References customers.customer_id.
+          - name: product_id
+            description: References products.product_id.
+          - name: quantity
+            description: Units ordered.
+          - name: order_ts
+            description: >
+              When the order was placed. The parquet stores the instant in UTC.
+          - name: status
+            description: Order status; one of placed, shipped, delivered, cancelled.

@@ -1,0 +1,21 @@
+parquet_duckdb_demo:
+  target: local
+  outputs:
+    local:
+      type: duckdb
+      path: parquet_demo.duckdb
+      threads: 4
+    # Reads the parquet directly from S3 via httpfs; auth comes from the
+    # pokemon-app AWS SSO profile (run: aws sso login --profile pokemon-app).
+    s3:
+      type: duckdb
+      path: parquet_demo_s3.duckdb
+      threads: 4
+      extensions:
+        - httpfs
+      secrets:
+        - type: s3
+          provider: credential_chain
+          chain: sso
+          profile: pokemon-app
+          region: us-east-1

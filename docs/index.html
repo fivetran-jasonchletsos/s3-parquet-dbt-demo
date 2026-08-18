@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dbt transforms parquet in S3</title>
+<meta name="description" content="Proof that dbt can transform parquet files stored in S3 without loading them into a warehouse: DuckDB and Snowflake proven live against the same bucket, with a parse-validated Databricks project.">
+<meta name="theme-color" content="#0073FF">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* Fivetran layer: data movement, landing, storage */
+    --ft-blue: #0073FF;
+    --ft-blue-ink: #0055CC;      /* text-safe blue, 6.6:1 on white */
+    --ft-blue-wash: #EDF4FF;
+    --ft-blue-line: #BFD9FF;
+    /* dbt Labs layer: transformation, models, tests */
+    --dbt-coral: #FF694A;
+    --dbt-coral-ink: #B93A1E;    /* text-safe coral, 5.7:1 on white */
+    --dbt-coral-num: #D64424;    /* large-text coral, 4.5:1 on white */
+    --dbt-coral-wash: #FFF1EC;
+    --dbt-coral-line: #FFC9BB;
+    /* neutrals */
+    --navy: #0B1E3B;
+    --ink: #12233D;
+    --ink-soft: #46587A;
+    --hairline: #DCE4F0;
+    --bg: #F6F9FD;
+    --card: #FFFFFF;
+    --grid: rgba(11, 30, 59, 0.04);
+    --pass: #1E6B2E;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --body: "IBM Plex Sans", "Helvetica Neue", sans-serif;
+    --display: "Familjen Grotesk", "IBM Plex Sans", sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 1.02rem;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    background:
+      radial-gradient(1100px 520px at 12% -4%, rgba(0, 115, 255, 0.08), transparent 62%),
+      radial-gradient(900px 480px at 92% 14%, rgba(255, 105, 74, 0.06), transparent 60%),
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px),
+      var(--bg);
+    background-size: auto, auto, 30px 30px, 30px 30px, auto;
+    background-attachment: fixed;
+  }
+  .sheet {
+    max-width: 47rem;
+    margin: 0 auto;
+    padding: 0 1.5rem 5rem;
+    background: var(--card);
+    border-left: 1px solid var(--hairline);
+    border-right: 1px solid var(--hairline);
+    box-shadow: 0 0 70px rgba(11, 30, 59, 0.07);
+  }
+  @media (min-width: 53rem) {
+    .sheet { padding-left: 3.5rem; padding-right: 3.5rem; }
+  }
+
+  a {
+    color: var(--ft-blue-ink);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+  }
+  a:hover { text-decoration-thickness: 2px; }
+
+  /* load reveal */
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: none; }
+  }
+  header, section, footer { animation: rise 0.55s cubic-bezier(0.22, 0.8, 0.36, 1) both; }
+  header { animation-delay: 0.02s; }
+  section:nth-of-type(1) { animation-delay: 0.10s; }
+  section:nth-of-type(2) { animation-delay: 0.18s; }
+  section:nth-of-type(3) { animation-delay: 0.26s; }
+  section:nth-of-type(4) { animation-delay: 0.34s; }
+  section:nth-of-type(5) { animation-delay: 0.42s; }
+  section:nth-of-type(6) { animation-delay: 0.50s; }
+  section:nth-of-type(7) { animation-delay: 0.58s; }
+  footer { animation-delay: 0.66s; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+
+  header { padding: 4.2rem 0 2.4rem; border-bottom: 3px solid var(--navy); }
+  .brands {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin-bottom: 1.6rem;
+  }
+  .brand {
+    font-family: var(--display);
+    font-size: 0.85rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    padding: 0.55rem 0.9rem;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.55em;
+    min-height: 2.4rem;
+  }
+  .brand .role {
+    font-family: var(--mono);
+    font-size: 0.64rem;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    opacity: 0.85;
+  }
+  .brand-ft  { background: var(--ft-blue-wash);  color: var(--ft-blue-ink);  border: 1px solid var(--ft-blue-line); }
+  .brand-dbt { background: var(--dbt-coral-wash); color: var(--dbt-coral-ink); border: 1px solid var(--dbt-coral-line); }
+
+  .kicker {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ft-blue-ink);
+    margin-bottom: 1.1rem;
+  }
+  h1 {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: clamp(2.2rem, 6vw, 3.3rem);
+    line-height: 1.06;
+    letter-spacing: -0.015em;
+    color: var(--navy);
+  }
+  .subtitle {
+    margin-top: 1.1rem;
+    font-size: 1.12rem;
+    color: var(--ink-soft);
+    max-width: 38rem;
+  }
+
+  section { padding-top: 3rem; }
+  .sec-label {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    border-top: 1px solid var(--hairline);
+    padding-top: 0.9rem;
+    margin-bottom: 1.1rem;
+  }
+  .sec-label b { color: var(--ft-blue-ink); font-weight: 600; margin-right: 0.75em; }
+  h2 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 1.6rem;
+    line-height: 1.18;
+    letter-spacing: -0.01em;
+    color: var(--navy);
+    margin-bottom: 0.9rem;
+  }
+  h3 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 1.16rem;
+    color: var(--navy);
+    margin: 1.6rem 0 0.4rem;
+  }
+  p + p { margin-top: 0.9rem; }
+  .muted { color: var(--ink-soft); }
+
+  .answer {
+    margin-top: 1.4rem;
+    padding: 1.1rem 1.3rem;
+    border-left: 3px solid var(--dbt-coral);
+    background: var(--dbt-coral-wash);
+    font-size: 1.1rem;
+    border-radius: 0 4px 4px 0;
+  }
+  .answer strong { font-weight: 600; color: var(--dbt-coral-ink); }
+
+  code, .mono {
+    font-family: var(--mono);
+    font-size: 0.84em;
+  }
+  code {
+    background: var(--ft-blue-wash);
+    color: var(--navy);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    overflow-wrap: anywhere;
+  }
+  pre {
+    background: var(--navy);
+    color: #E8EFFA;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    line-height: 1.6;
+    padding: 0.9rem 1.1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 0.7rem 0 0.4rem;
+  }
+  pre .cm { color: #8FA6C9; }
+
+  figure.diagram { margin: 1.6rem 0 0.4rem; overflow-x: auto; }
+  figure.diagram svg { width: 100%; min-width: 620px; height: auto; display: block; }
+  figcaption {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--ink-soft);
+    margin-top: 0.7rem;
+    line-height: 1.5;
+  }
+  figcaption .key-ft  { color: var(--ft-blue-ink);  font-weight: 600; }
+  figcaption .key-dbt { color: var(--dbt-coral-ink); font-weight: 600; }
+
+  .figures {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: var(--hairline);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    overflow: hidden;
+    margin: 1.5rem 0 1.3rem;
+  }
+  @media (max-width: 40rem) { .figures { grid-template-columns: 1fr; } }
+  .figure-cell {
+    background: var(--card);
+    padding: 1.1rem 1.2rem 1rem;
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
+  }
+  .figure-cell:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 18px rgba(11, 30, 59, 0.10);
+  }
+  .figure-cell .num {
+    font-family: var(--mono);
+    font-size: 1.55rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    display: block;
+    color: var(--dbt-coral-num);
+  }
+  .figure-cell .lbl {
+    font-size: 0.88rem;
+    color: var(--ink-soft);
+    display: block;
+    margin-top: 0.25rem;
+    line-height: 1.4;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.92rem;
+    margin: 1.2rem 0 0.4rem;
+  }
+  th {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    text-align: left;
+    color: var(--ink-soft);
+    border-bottom: 2px solid var(--navy);
+    padding: 0 0.8rem 0.45rem 0;
+  }
+  td {
+    border-bottom: 1px solid var(--hairline);
+    padding: 0.6rem 0.8rem 0.6rem 0;
+    vertical-align: top;
+  }
+  td.mono { font-size: 0.8rem; color: var(--ink-soft); overflow-wrap: anywhere; }
+  .pass { font-family: var(--mono); font-size: 0.75rem; font-weight: 600; color: var(--pass); white-space: nowrap; }
+  .pend { font-family: var(--mono); font-size: 0.75rem; font-weight: 600; color: var(--ink-soft); white-space: nowrap; }
+
+  .runbook {
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    padding: 1.2rem 1.3rem 1.4rem;
+    margin-top: 1.1rem;
+    background: var(--card);
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
+  }
+  .runbook:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 18px rgba(11, 30, 59, 0.10);
+  }
+  .runbook h3 { margin-top: 0; }
+  .runbook .mech {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--ft-blue-ink);
+    letter-spacing: 0.06em;
+    display: block;
+    margin: 0.15rem 0 0.6rem;
+  }
+  .runbook p { font-size: 0.98rem; }
+  .rb-link {
+    font-size: 0.92rem;
+    display: inline-block;
+    margin-top: 0.5rem;
+    padding: 0.45rem 0;
+  }
+
+  .fieldnote {
+    border: 1px solid var(--hairline);
+    border-left: 3px solid var(--dbt-coral);
+    border-radius: 0 6px 6px 0;
+    padding: 1.1rem 1.3rem 1.2rem;
+    margin-top: 1.3rem;
+    background: var(--card);
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
+  }
+  .fieldnote:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 18px rgba(11, 30, 59, 0.10);
+  }
+  .fieldnote h3 { margin-top: 0; font-size: 1.08rem; }
+  .fieldnote .tag {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--dbt-coral-ink);
+    display: block;
+    margin-bottom: 0.4rem;
+  }
+  .fieldnote p { font-size: 0.96rem; }
+
+  footer {
+    margin-top: 4rem;
+    border-top: 3px solid var(--navy);
+    padding-top: 1.3rem;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    color: var(--ink-soft);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 2rem;
+    justify-content: space-between;
+  }
+  footer a { padding: 0.3rem 0; display: inline-block; }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<header>
+  <div class="brands">
+    <span class="brand brand-ft">Fivetran <span class="role">data movement</span></span>
+    <span class="brand brand-dbt">dbt Labs <span class="role">transformation</span></span>
+  </div>
+  <div class="kicker">Sales engineering field proof · verified 2026-08-18</div>
+  <h1>dbt transforms parquet in S3</h1>
+  <p class="subtitle">Three engines, one set of dbt models, five parquet files read in place from a bucket. No copy or load step into a warehouse.</p>
+</header>
+
+<section id="question">
+  <div class="sec-label"><b>01</b>The question</div>
+  <h2>Can dbt transform parquet files stored in S3?</h2>
+  <p>Asked by Andy Ellman. The doubt is reasonable: dbt is usually shown transforming tables that already live inside a warehouse, and "files in a bucket" sounds like an ingestion problem.</p>
+  <div class="answer">
+    <strong>Yes.</strong> dbt does not move data; it compiles SQL and hands it to an engine. Any engine that can read parquet in S3 can be the dbt backend. Proven here live on DuckDB and Snowflake against the same bucket, with a Databricks project built and parse-validated. Identical models, identical results.
+  </div>
+</section>
+
+<section id="architecture">
+  <div class="sec-label"><b>02</b>How it works</div>
+  <h2>The files are the source, the engine is the compute</h2>
+  <p>Five parquet files sit at <code>s3://jason-chletsos-parquet-dbt-demo/raw/</code> (us-east-1): 500 customers, 50 products, 5,000 orders of trading-card storefront sample data. Each engine reads those files where they sit; dbt builds the same three staging views and one fact table on top.</p>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 760 700" role="img" aria-label="Architecture: two landing paths write parquet to S3; DuckDB, Snowflake, and Databricks read it in place; dbt compiles the same models on every engine. Blue marks data movement and storage; coral marks dbt transformation.">
+      <defs>
+        <marker id="arrBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#0073FF"/>
+        </marker>
+        <marker id="arrCoral" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#FF694A"/>
+        </marker>
+      </defs>
+      <style>
+        .boxMove { fill:#EDF4FF; stroke:#0073FF; stroke-width:1.2; stroke-dasharray:5 4; }
+        .boxStore { fill:#EDF4FF; stroke:#0073FF; stroke-width:1.8; }
+        .boxEngine { fill:#FFFFFF; stroke:#0B1E3B; stroke-width:1.4; }
+        .boxDbt { fill:#FFF1EC; stroke:#FF694A; stroke-width:1.8; }
+        .t { font-family:"Familjen Grotesk","IBM Plex Sans",sans-serif; font-size:17px; font-weight:600; fill:#0B1E3B; }
+        .m { font-family:"IBM Plex Mono",Menlo,monospace; font-size:11px; fill:#46587A; }
+        .mBlue { font-family:"IBM Plex Mono",Menlo,monospace; font-size:11px; fill:#0055CC; font-weight:600; letter-spacing:1.5px; }
+        .mCoral { font-family:"IBM Plex Mono",Menlo,monospace; font-size:11px; fill:#B93A1E; }
+        .flowBlue { stroke:#0073FF; stroke-width:1.4; fill:none; }
+        .flowCoral { stroke:#FF694A; stroke-width:1.5; fill:none; }
+        .lane { font-family:"IBM Plex Mono",Menlo,monospace; font-size:10px; fill:#46587A; letter-spacing:1.5px; }
+      </style>
+
+      <!-- landing lane label -->
+      <text class="lane" x="16" y="24">LANDING</text>
+      <line x1="90" y1="20" x2="744" y2="20" stroke="#DCE4F0" stroke-width="1"/>
+
+      <!-- landing boxes: Fivetran layer = blue -->
+      <rect class="boxMove" x="40" y="42" width="310" height="74" rx="4"/>
+      <text class="t" x="60" y="72">Existing drops</text>
+      <text class="m" x="60" y="92">generate_parquet.py + aws s3 sync</text>
+      <text class="m" x="60" y="106">(what this repo simulates)</text>
+
+      <rect class="boxMove" x="410" y="42" width="310" height="74" rx="4"/>
+      <text class="t" x="430" y="72">Fivetran Managed Data Lake</text>
+      <text class="m" x="430" y="92">connectors write parquet-backed</text>
+      <text class="m" x="430" y="106">Iceberg tables Fivetran maintains</text>
+
+      <path class="flowBlue" d="M195,116 L195,150 Q195,160 205,160 L360,160" marker-end="url(#arrBlue)"/>
+      <path class="flowBlue" d="M565,116 L565,150 Q565,160 555,160 L400,160" marker-end="url(#arrBlue)"/>
+
+      <!-- storage lane -->
+      <text class="lane" x="16" y="164">STORAGE</text>
+
+      <rect class="boxStore" x="130" y="188" width="500" height="86" rx="4"/>
+      <text class="mBlue" x="380" y="214" text-anchor="middle">S3 · PARQUET · ONE COPY</text>
+      <text class="m" x="380" y="236" text-anchor="middle">s3://jason-chletsos-parquet-dbt-demo/raw/</text>
+      <text class="m" x="380" y="254" text-anchor="middle">{customers, products, orders}/*.parquet — 5 files, us-east-1</text>
+
+      <!-- arrows S3 -> engines (read in place): still the movement layer = blue -->
+      <path class="flowBlue" d="M180,274 L180,318" marker-end="url(#arrBlue)"/>
+      <path class="flowBlue" d="M380,274 L380,318" marker-end="url(#arrBlue)"/>
+      <path class="flowBlue" d="M580,274 L580,318" marker-end="url(#arrBlue)"/>
+      <rect x="215" y="290" width="330" height="17" fill="#FFFFFF"/>
+      <text class="mBlue" x="380" y="302" text-anchor="middle">READ IN PLACE — NO COPY, NO LOAD</text>
+
+      <!-- engines lane -->
+      <text class="lane" x="16" y="342">ENGINES</text>
+
+      <rect class="boxEngine" x="60" y="356" width="200" height="108" rx="4"/>
+      <text class="t" x="160" y="386" text-anchor="middle">DuckDB</text>
+      <text class="m" x="160" y="408" text-anchor="middle">httpfs extension,</text>
+      <text class="m" x="160" y="422" text-anchor="middle">SSO credential chain</text>
+      <text class="m" x="160" y="446" text-anchor="middle" fill="#1E6B2E" font-weight="600">15/15 pass · local + s3://</text>
+
+      <rect class="boxEngine" x="280" y="356" width="200" height="108" rx="4"/>
+      <text class="t" x="380" y="386" text-anchor="middle">Snowflake</text>
+      <text class="m" x="380" y="408" text-anchor="middle">external tables over a</text>
+      <text class="m" x="380" y="422" text-anchor="middle">storage integration</text>
+      <text class="m" x="380" y="446" text-anchor="middle" fill="#1E6B2E" font-weight="600">15/15 pass · live</text>
+
+      <rect class="boxEngine" x="500" y="356" width="200" height="108" rx="4"/>
+      <text class="t" x="600" y="386" text-anchor="middle">Databricks</text>
+      <text class="m" x="600" y="408" text-anchor="middle">read_files(...) via Unity</text>
+      <text class="m" x="600" y="422" text-anchor="middle">Catalog external location</text>
+      <text class="m" x="600" y="446" text-anchor="middle">parse-validated · run pending</text>
+
+      <!-- arrows engines -> dbt band: transformation layer = coral -->
+      <path class="flowCoral" d="M160,464 L160,506" marker-end="url(#arrCoral)"/>
+      <path class="flowCoral" d="M380,464 L380,506" marker-end="url(#arrCoral)"/>
+      <path class="flowCoral" d="M600,464 L600,506" marker-end="url(#arrCoral)"/>
+
+      <!-- transform lane -->
+      <text class="lane" x="16" y="530">TRANSFORM</text>
+
+      <rect class="boxDbt" x="60" y="544" width="640" height="118" rx="4"/>
+      <text class="t" x="380" y="576" text-anchor="middle">dbt — one set of models, three profiles</text>
+      <text class="mCoral" x="380" y="600" text-anchor="middle">stg_customers · stg_products · stg_orders (views)</text>
+      <text class="mCoral" x="380" y="618" text-anchor="middle">fct_daily_revenue (table) + 11 schema tests</text>
+      <text class="m" x="380" y="642" text-anchor="middle">dbt compiles SQL; the engine does the reading</text>
+    </svg>
+    <figcaption>Two landing paths, one copy of the data in S3, three engines reading it where it sits, identical dbt models on top. <span class="key-ft">Blue: data movement and storage (Fivetran layer).</span> <span class="key-dbt">Coral: dbt transformation (dbt Labs layer).</span></figcaption>
+  </figure>
+</section>
+
+<section id="results">
+  <div class="sec-label"><b>03</b>Live results</div>
+  <h2>Same numbers from every run</h2>
+  <p>Every verified run builds the same fifteen steps: three staging views, one fact table, eleven schema tests (unique and not_null keys, accepted status values, relationships from orders to both dimensions). The fact table lands on identical figures each time.</p>
+
+  <div class="figures">
+    <div class="figure-cell"><span class="num">3,005</span><span class="lbl">rows in fct_daily_revenue on every verified run</span></div>
+    <div class="figure-cell"><span class="num">735,258.78</span><span class="lbl">gross revenue, identical to the cent across runs</span></div>
+    <div class="figure-cell"><span class="num">15 / 15</span><span class="lbl">build steps passing on each verified run (4 models, 11 tests)</span></div>
+  </div>
+
+  <table>
+    <thead><tr><th>Run</th><th>How it reads the parquet</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>DuckDB, local files</td><td class="mono">read_parquet() over data/ on disk</td><td><span class="pass">15/15 PASS</span></td></tr>
+      <tr><td>DuckDB, S3 direct</td><td class="mono">httpfs extension, s3:// paths, SSO credential chain</td><td><span class="pass">15/15 PASS</span></td></tr>
+      <tr><td>Snowflake</td><td class="mono">external tables (dbt_external_tables) over a storage integration</td><td><span class="pass">15/15 PASS</span></td></tr>
+      <tr><td>Databricks</td><td class="mono">read_files(..., format => 'parquet') via Unity Catalog external location</td><td><span class="pend">PARSE-VALIDATED</span></td></tr>
+    </tbody>
+  </table>
+
+  <p class="muted" style="font-size:0.95rem;">"In place" means exactly that: no <code>COPY INTO</code>, no staging load, no warehouse-resident copy of the raw data. Snowflake's external tables, Databricks' <code>read_files</code>, and DuckDB's <code>httpfs</code> all scan the bucket objects at query time. To be precise about outputs: the staging views are stored SQL, and <code>fct_daily_revenue</code> materializes as a native table in each engine (DuckDB file, Snowflake table, Delta on Databricks) — the raw data is never loaded, the curated aggregate is. Writing model outputs back to S3 as parquet or Iceberg is the follow-on pattern, not shown here. The Databricks project is built and parse-validated; the live run is pending a workspace with a Unity Catalog external location. Its IAM role is already provisioned in Terraform.</p>
+</section>
+
+<section id="runbooks">
+  <div class="sec-label"><b>04</b>Runbooks</div>
+  <h2>Reproduce it per engine</h2>
+  <p>Each dbt project carries its own <code>profiles.yml</code> and runs with <code>--profiles-dir .</code>, so nothing touches <code>~/.dbt</code>. Full step-by-step runbooks live in each project's README in the repo.</p>
+
+  <div class="runbook">
+    <h3>DuckDB</h3>
+    <span class="mech">httpfs + credential_chain secret</span>
+    <p>The zero-infrastructure proof. Default target reads the checked-in local files; the <code>s3</code> target reads the bucket directly, picking up AWS SSO credentials automatically.</p>
+<pre>cd dbt_duckdb
+python3 -m dbt.cli.main build --profiles-dir .              <span class="cm"># local files</span>
+python3 -m dbt.cli.main build --profiles-dir . --target s3  <span class="cm"># same files in the bucket</span></pre>
+    <a class="rb-link" href="https://github.com/fivetran-jasonchletsos/s3-parquet-dbt-demo/blob/main/dbt_duckdb/README.md">dbt_duckdb/README.md</a>
+  </div>
+
+  <div class="runbook">
+    <h3>Snowflake</h3>
+    <span class="mech">storage integration + dbt_external_tables</span>
+    <p>One-time setup creates the storage integration, stage, and grants (<code>setup/snowflake_setup.sql</code>), with the standard two-step trust handshake: <code>DESC INTEGRATION</code> returns Snowflake's IAM user and external ID, which get stamped into the IAM role trust policy on the AWS side. Then:</p>
+<pre>cd dbt_snowflake
+python3 -m dbt.cli.main deps --profiles-dir .
+python3 -m dbt.cli.main run-operation stage_external_sources --profiles-dir .
+python3 -m dbt.cli.main build --profiles-dir .</pre>
+    <a class="rb-link" href="https://github.com/fivetran-jasonchletsos/s3-parquet-dbt-demo/blob/main/dbt_snowflake/README.md">dbt_snowflake/README.md</a>
+  </div>
+
+  <div class="runbook">
+    <h3>Databricks</h3>
+    <span class="mech">read_files over s3:// + Unity Catalog</span>
+    <p>Staging views call <code>read_files(..., format =&gt; 'parquet')</code> against the raw S3 paths; only <code>fct_daily_revenue</code> is persisted, as a Delta table. Needs a Unity Catalog storage credential and external location (documented in <code>setup/databricks_setup.md</code>); the IAM role it assumes is already provisioned.</p>
+<pre>cd dbt_databricks
+python3 -m dbt.cli.main parse --profiles-dir .   <span class="cm"># offline validation</span>
+python3 -m dbt.cli.main run --profiles-dir .     <span class="cm"># once a workspace is wired</span>
+python3 -m dbt.cli.main test --profiles-dir .</pre>
+    <a class="rb-link" href="https://github.com/fivetran-jasonchletsos/s3-parquet-dbt-demo/blob/main/dbt_databricks/README.md">dbt_databricks/README.md</a>
+  </div>
+
+  <div class="runbook">
+    <h3>Infrastructure</h3>
+    <span class="mech">terraform: bucket + IAM roles</span>
+    <p>Terraform provisions the S3 bucket and the IAM roles Snowflake and Databricks assume (two-phase apply for the trust handshakes). <code>upload/upload_to_s3.sh</code> syncs the generated data to the bucket's <code>raw/</code> prefix.</p>
+    <a class="rb-link" href="https://github.com/fivetran-jasonchletsos/s3-parquet-dbt-demo/blob/main/terraform/main.tf">terraform/main.tf</a> &nbsp;·&nbsp;
+    <a class="rb-link" href="https://github.com/fivetran-jasonchletsos/s3-parquet-dbt-demo/blob/main/upload/upload_to_s3.sh">upload/upload_to_s3.sh</a>
+  </div>
+</section>
+
+<section id="fieldnotes">
+  <div class="sec-label"><b>05</b>Field notes</div>
+  <h2>Two things that actually broke</h2>
+  <p>Both hit during the live Snowflake run, both fixed, both worth knowing before a customer conversation.</p>
+
+  <div class="fieldnote">
+    <span class="tag">Cross-cloud external tables</span>
+    <h3>auto_refresh must be false when Snowflake is not on AWS</h3>
+    <p>The <code>sales_eng_demo</code> Snowflake account is not hosted on AWS, and external-table auto-refresh depends on cloud-native event notifications that do not cross clouds. Snowflake defaults <code>auto_refresh</code> to true and errors on creation. Fix: set <code>auto_refresh = false</code> explicitly in the external table definition and refresh on demand.</p>
+  </div>
+
+  <div class="fieldnote">
+    <span class="tag">Timestamp semantics</span>
+    <h3>TIMESTAMP_TZ re-stamps parquet UTC with the session timezone</h3>
+    <p>Typing the parquet's UTC timestamp column as <code>TIMESTAMP_TZ</code> made Snowflake reinterpret the UTC wall-clock in the session timezone (America/Los_Angeles), silently shifting every instant by 7 to 8 hours — enough to move orders across date boundaries and break parity on the daily grain. Fix: type it <code>TIMESTAMP_NTZ</code> (naive UTC) and take a plain date cast. After that, the daily grain matches across all engines exactly.</p>
+  </div>
+</section>
+
+<section id="limits">
+  <div class="sec-label"><b>06</b>Scale and limits</div>
+  <h2>What 5,550 rows does and does not prove</h2>
+  <p>The runs above prove the mechanism, not the economics. External tables and <code>read_files</code> carry no micro-partitions, clustering, or table statistics, so every query rescans the files — pruning is limited to what the parquet footers and the S3 path layout provide. At this volume that is invisible; at production volume it is the bill.</p>
+  <p>The mitigations, in order: partition the S3 paths (by date, typically) so engines can skip whole prefixes; move to Iceberg — which is what Fivetran MDLS lands — for file-level statistics, snapshots, and compaction; and past meaningful volume, materialize hot marts as native tables, which this demo already does for <code>fct_daily_revenue</code>. The pattern fits landing and staging zones best: one raw copy in S3, dbt transforming it in place, native storage reserved for curated aggregates.</p>
+  <p>Incremental models work unchanged — the engine owns the SQL, so an incremental <code>fct_daily_revenue</code> filtering on <code>order_ts</code> compiles and runs the same way. The one operational caveat is Snowflake's external-table refresh (field note above); with MDLS the Iceberg catalog removes it, because new files surface as new table snapshots.</p>
+</section>
+
+<section id="fivetran">
+  <div class="sec-label"><b>07</b>The Fivetran angle</div>
+  <h2>Fivetran can own the landing</h2>
+  <p>The generator and upload script in this repo simulate parquet that already lands in S3. In production, Fivetran's Managed Data Lake Service replaces both: connectors write to your S3 bucket as parquet-backed Iceberg tables that Fivetran maintains — initial sync, incremental updates, schema evolution, compaction.</p>
+  <p>The transform pattern is unchanged. Snowflake and Databricks read the Iceberg tables in place through their catalogs, the dbt staging models point at those tables instead of raw paths, and everything downstream — <code>fct_daily_revenue</code>, the schema tests — is identical. One copy of the data in S3 serves every engine. Details in <a href="https://github.com/fivetran-jasonchletsos/s3-parquet-dbt-demo/blob/main/fivetran/INGESTION.md">fivetran/INGESTION.md</a>.</p>
+  <h3>When an SE reaches for this</h3>
+  <p>Point at a lake destination when the customer wants one copy of the data queried by multiple (or future) engines without re-ingesting; when ownership or residency requires the data to live in their bucket, not a vendor's storage; or when the architecture is warehouse-optional and compute should stay swappable. The warehouse destination is still right when one warehouse serves all workloads and its native storage features carry the query load, when the team wants no lake-side moving parts to operate, or when interactive latency on large scans outweighs storage flexibility.</p>
+  <p>The talk track in one breath: Fivetran lands governed Iceberg in the customer's bucket, and dbt transforms it in place on whatever engine they already pay for. Their data, their account, swappable compute.</p>
+</section>
+
+<footer>
+  <span>Repo: <a href="https://github.com/fivetran-jasonchletsos/s3-parquet-dbt-demo">fivetran-jasonchletsos/s3-parquet-dbt-demo</a></span>
+  <span>Built 2026-08-18 · Jason Chletsos, Fivetran SE</span>
+</footer>
+
+</div>
+</body>
+</html>

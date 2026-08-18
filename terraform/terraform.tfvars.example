@@ -1,0 +1,20 @@
+# Copy to terraform.tfvars after phase 2 of the two-phase apply.
+#
+# Phase 1: apply with no tfvars (placeholder defaults). Note the
+#          snowflake_role_arn / databricks_role_arn outputs.
+# Phase 2 (Snowflake):
+#   CREATE STORAGE INTEGRATION s3_parquet_demo
+#     TYPE = EXTERNAL_STAGE
+#     STORAGE_PROVIDER = 'S3'
+#     ENABLED = TRUE
+#     STORAGE_AWS_ROLE_ARN = '<snowflake_role_arn output>'
+#     STORAGE_ALLOWED_LOCATIONS = ('s3://jason-chletsos-parquet-dbt-demo/raw/');
+#   DESC INTEGRATION s3_parquet_demo;
+#   -- copy the two values below from the DESC output, then terraform apply.
+# Phase 2 (Databricks): create the Unity Catalog storage credential with the
+#   databricks_role_arn output, copy the External ID it reports, then apply.
+
+snowflake_iam_user_arn = "arn:aws:iam::123456789012:user/abcd-s-xxxx0000"
+snowflake_external_id  = "AB12345_SFCRole=1_abcdefghijklmnop="
+
+databricks_external_id = "00000000-0000-0000-0000-000000000000"

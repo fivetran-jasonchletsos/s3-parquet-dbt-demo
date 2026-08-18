@@ -1,0 +1,10 @@
+target/
+dbt_packages/
+logs/
+*.duckdb
+*.duckdb.wal
+.terraform/
+*.tfstate*
+terraform.tfvars
+__pycache__/
+.user.yml

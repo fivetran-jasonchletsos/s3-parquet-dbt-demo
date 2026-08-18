@@ -1,0 +1,14 @@
+Andy asked a question worth answering properly: can dbt transform parquet files sitting in S3? Short answer: yes. dbt compiles SQL and the engine reads the parquet in place — no copy or load into a warehouse.
+
+I proved it three ways with identical dbt models (3 staging views, 1 fact table, 11 schema tests, 15 build steps) over 5 parquet files in S3 (500 customers, 50 products, 5,000 orders):
+- DuckDB on local files: 15/15 pass
+- DuckDB reading s3:// directly via httpfs: 15/15 pass
+- Snowflake via storage integration + external tables (dbt_external_tables): 15/15 pass
+
+Exact parity on every run: fct_daily_revenue = 3,005 rows, gross revenue 735,258.78. Databricks (read_files over s3://) is built and parse-validated, pending a workspace.
+
+This is the same pattern Fivetran's Managed Data Lake Service enables — MDLS lands connector data in S3 as parquet-backed Iceberg, and dbt transforms it in place.
+
+Field notes: Snowflake external tables over S3 from a non-AWS account need auto_refresh = false, and use TIMESTAMP_NTZ for parquet UTC timestamps — TIMESTAMP_TZ re-stamps them with the session timezone.
+
+Repo: github.com/fivetran-jasonchletsos/s3-parquet-dbt-demo. Write-up: fivetran-jasonchletsos.github.io/s3-parquet-dbt-demo.

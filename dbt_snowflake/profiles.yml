@@ -1,0 +1,18 @@
+# Kept inside the project and used with --profiles-dir . so ~/.dbt is untouched.
+# All credentials come from env vars; defaults exist only so `dbt parse` works offline.
+parquet_snowflake_demo:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      # Account locator, e.g. myorg-my_account. Kept out of the repo; the
+      # parse-safe default below is a placeholder only.
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT', 'myorg-my_account') }}"
+      user: "{{ env_var('SNOWFLAKE_USER', 'jason.chletsos@fivetran.com') }}"
+      # SSO via browser popup; no password stored anywhere.
+      authenticator: "{{ env_var('SNOWFLAKE_AUTHENTICATOR', 'externalbrowser') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE', 'SALES_DEMO_ROLE') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'DEMO_WH') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE', 'JASON_CHLETSOS_PARQUET_DEMO') }}"
+      schema: "{{ env_var('SNOWFLAKE_SCHEMA', 'RAW') }}"
+      threads: 4

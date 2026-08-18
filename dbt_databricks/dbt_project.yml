@@ -1,0 +1,23 @@
+name: parquet_databricks_demo
+config-version: 2
+
+profile: parquet_databricks_demo
+
+model-paths: ["models"]
+
+vars:
+  # Single source of truth for the raw parquet root; the three staging
+  # models read subpaths of it with read_files().
+  s3_raw_root: "s3://jason-chletsos-parquet-dbt-demo/raw"
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  parquet_databricks_demo:
+    staging:
+      +materialized: view
+    marts:
+      # Delta is the dbt-databricks default table format; no override needed.
+      +materialized: table
